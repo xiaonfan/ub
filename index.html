@@ -1,4 +1,23 @@
-/* Main mobile controls wrapper */
+<!DOCTYPE html>
+<html lang="en">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>3D Car Game - Enhanced</title>
+    <script src="https://cdn.tailwindcss.com"></script>
+    <script>
+        tailwind.config = {
+            theme: {
+                extend: {
+                    fontFamily: {
+                        sans: ['Inter', 'sans-serif'],
+                    },
+                },
+            }
+        }
+    </script>
+    <style>
+       /* Main mobile controls wrapper */
 .mobile-controls {
     position: fixed;
     width: 100%;
@@ -65,3 +84,667 @@
         display: block;
     }
 }
+
+    </style>
+    <link rel="stylesheet" href="https://cdnjs.cloudflare.com/ajax/libs/font-awesome/6.0.0-beta3/css/all.min.css">
+</head>
+<body class="bg-gray-800">
+    <div id="gameContainer">
+        <canvas id="gameCanvas"></canvas>
+    </div>
+
+    <div class="game-stats rounded-lg">
+        <h2 class="text-xl font-bold mb-2">Stats</h2>
+        <p>Speed: <span id="speedDisplay">0</span> km/h</p>
+    </div>
+    
+    <!-- Mobile Controls -->
+    <div class="控件" id="mobileControls">
+        <div class="control-button up-button" id="upButton">
+            <i class="fas fa-arrow-up"></i>
+        </div>
+        <div class="control-button down-button" id="downButton">
+            <i class="fas fa-arrow-down"></i>
+        </div>
+        <div class="control-button left-button" id="leftButton">
+            <i class="fas fa-arrow-left"></i>
+        </div>
+        <div class="control-button right-button" id="rightButton">
+            <i class="fas fa-arrow-right"></i>
+        </div>
+    </div>
+
+    <!-- Toggle Controls Button -->
+    <div class="toggle-controls-button" id="toggleControlsButton">
+        <i class="fas fa-eye"></i>
+    </div>
+
+    <script src="https://cdnjs.cloudflare.com/ajax/libs/three.js/r128/three.min.js"></script>
+    <script type="module">
+        // --- SCENE SETUP ---
+        let scene, camera, renderer;
+        let car, ground;
+        let cityObjects = []; // Stores buildings and trees (obstacles)
+        let ramps = [];       // Stores ramp objects
+
+        // Car movement parameters
+        let currentSpeed = 0;
+        const maxSpeed = 0.5;
+        const accelerationRate = 0.008;
+        const decelerationRate = 0.01;
+        const brakeRate = 0.02;
+        const reverseSpeed = 0.2;
+        const carRotationSpeed = 0.03;
+        const carFriction = 0.005; // Applies constant drag
+        const gravity = 0.005; // Gravity strength
+
+        let moveForward = false;
+        let moveBackward = false;
+        let turnLeft = false;
+        let turnRight = false;
+
+        const speedDisplay = document.getElementById('speedDisplay');
+
+        // Initialize the game
+        function init() {
+            // Scene
+            scene = new THREE.Scene();
+            scene.background = new THREE.Color(0x87CEEB); // Sky blue background
+            scene.fog = new THREE.Fog(0x77CEEB, 100, 500); // Increased fog distance for larger scene
+
+            // Camera
+            camera = new THREE.PerspectiveCamera(75, window.innerWidth / window.innerHeight, 0.1, 1000);
+            camera.position.set(0, 5, -10); // Initial camera position slightly behind and above where car will be
+
+            // Renderer
+            renderer = new THREE.WebGLRenderer({ canvas: document.getElementById('gameCanvas'), antialias: true });
+            renderer.setSize(window.innerWidth, window.innerHeight);
+            renderer.shadowMap.enabled = true; // Enable shadows
+            renderer.shadowMap.type = THREE.PCFSoftShadowMap; // Softer shadows
+
+            // Lighting
+            const ambientLight = new THREE.AmbientLight(0xffffff, 0.6); // Soft white light
+            scene.add(ambientLight);
+
+            const directionalLight = new THREE.DirectionalLight(0xffffff, 0.8);
+            directionalLight.position.set(50, 80, 50); // Moved light source further
+            directionalLight.castShadow = true;
+            directionalLight.shadow.mapSize.width = 4096; // Increased shadow map size for better quality
+            directionalLight.shadow.mapSize.height = 4096;
+            directionalLight.shadow.camera.near = 0.5;
+            directionalLight.shadow.camera.far = 300;
+            directionalLight.shadow.camera.left = -250; // Increased shadow camera frustum for larger map
+            directionalLight.shadow.camera.right = 250;
+            directionalLight.shadow.camera.top = 250;
+            directionalLight.shadow.camera.bottom = -250;
+            scene.add(directionalLight);
+
+            // --- CREATE GAME OBJECTS ---
+            createCar();
+            createGround();
+            createCity();
+            createRamps(); // Add ramps to the scene
+
+            // Event Listeners for controls
+            document.addEventListener('keydown', onKeyDown);
+            document.addEventListener('keyup', onKeyUp);
+            window.addEventListener('resize', onWindowResize);
+            
+            // Setup mobile controls
+            setupMobileControls();
+
+            // Start the animation loop
+            animate();
+        }
+        
+        // Setup mobile touch controls
+        function setupMobileControls() {
+            const upButton = document.getElementById('upButton');
+            const downButton = document.getElementById('downButton');
+            const leftButton = document.getElementById('leftButton');
+            const rightButton = document.getElementById('rightButton');
+            const toggleControlsButton = document.getElementById('toggleControlsButton');
+            const mobileControls = document.getElementById('mobileControls');
+            
+            // Initially show controls on mobile
+            if (window.innerWidth <= 768) {
+                mobileControls.style.display = 'block';
+                toggleControlsButton.querySelector('i').className = 'fas fa-eye';
+            }
+            
+            // Touch/click event handlers for movement
+            const addButtonListeners = (button, action) => {
+                button.addEventListener('touchstart', (e) => {
+                    e.preventDefault();
+                    action(true);
+                });
+                button.addEventListener('touchend', (e) => {
+                    e.preventDefault();
+                    action(false);
+                });
+                button.addEventListener('touchcancel', (e) => {
+                    e.preventDefault();
+                    action(false);
+                });
+                // For desktop testing with mouse
+                button.addEventListener('mousedown', () => action(true));
+                button.addEventListener('mouseup', () => action(false));
+                button.addEventListener('mouseleave', () => action(false));
+            };
+            
+            addButtonListeners(upButton, (state) => moveForward = state);
+            addButtonListeners(downButton, (state) => moveBackward = state);
+            addButtonListeners(leftButton, (state) => turnLeft = state);
+            addButtonListeners(rightButton, (state) => turnRight = state);
+            
+            // Toggle controls visibility
+            toggleControlsButton.addEventListener('click', () => {
+                if (mobileControls.style.display === 'block') {
+                    mobileControls.style.display = 'none';
+                    toggleControlsButton.querySelector('i').className = 'fas fa-eye-slash';
+                } else {
+                    mobileControls.style.display = 'block';
+                    toggleControlsButton.querySelector('i').className = 'fas fa-eye';
+                }
+            });
+        }
+
+        // --- CAR MODEL (Placeholder) ---
+        function createCar() {
+            car = new THREE.Group();
+
+            // Car Body
+            const bodyGeometry = new THREE.BoxGeometry(2, 1, 4); // width, height, length
+            const bodyMaterial = new THREE.MeshStandardMaterial({ color: 0xff0000, roughness: 0.5, metalness: 0.3 }); // Red car
+            const carBody = new THREE.Mesh(bodyGeometry, bodyMaterial);
+            carBody.castShadow = true;
+            carBody.receiveShadow = true;
+            carBody.position.y = bodyGeometry.parameters.height / 2; // Position body center relative to car group's base
+            car.add(carBody);
+
+            // Store car's body dimensions for collision calculations
+            car.userData.bodyHeight = bodyGeometry.parameters.height;
+            car.userData.bodyWidth = bodyGeometry.parameters.width;
+            car.userData.bodyDepth = bodyGeometry.parameters.depth;
+
+            // Car Cabin
+            const cabinGeometry = new THREE.BoxGeometry(1.8, 0.8, 2);
+            const cabinMaterial = new THREE.MeshStandardMaterial({ color: 0xcccccc, roughness: 0.3, metalness: 0.1 });
+            const carCabin = new THREE.Mesh(cabinGeometry, cabinMaterial);
+            // Position cabin relative to car group's base and body height
+            carCabin.position.set(0, bodyGeometry.parameters.height + cabinGeometry.parameters.height / 2 - 0.2, -0.5);
+            carCabin.castShadow = true;
+            car.add(carCabin);
+
+            // Wheels (Placeholder Cylinders)
+            const wheelRadius = 0.4;
+            const wheelThickness = 0.3;
+            const wheelGeometry = new THREE.CylinderGeometry(wheelRadius, wheelRadius, wheelThickness, 32);
+            const wheelMaterial = new THREE.MeshStandardMaterial({ color: 0x333333, roughness: 0.8 }); // Dark grey wheels
+
+            const wheelPositions = [
+                { x: -1, y: 0, z: 1.3 },   // Front Left
+                { x: 1, y: 0, z: 1.3 },    // Front Right
+                { x: -1, y: 0, z: -1.3 },  // Rear Left
+                { x: 1, y: 0, z: -1.3 }    // Rear Right
+            ];
+
+            wheelPositions.forEach(pos => {
+                const wheel = new THREE.Mesh(wheelGeometry, wheelMaterial);
+                wheel.rotation.x = Math.PI / 2; // Rotate to stand upright
+                wheel.position.set(pos.x, wheelRadius, pos.z); // Position relative to car group's base
+                wheel.castShadow = true;
+                car.add(wheel);
+            });
+
+            car.position.set(0, 0, 0); // Car's base is at Y=0
+            scene.add(car);
+
+            // Initialize vertical velocity for gravity
+            car.userData.velocityY = 0;
+
+            // Create a bounding box for collision detection
+            car.userData.bbox = new THREE.Box3().setFromObject(car);
+        }
+
+        // --- GROUND & ROADS ---
+        function createGround() {
+            const mapSize = 500; // Expanded map size
+
+            // Main ground (grass/terrain)
+            const groundGeometry = new THREE.PlaneGeometry(mapSize, mapSize);
+            const groundMaterial = new THREE.MeshStandardMaterial({ color: 0x6B8E23, roughness: 0.9 }); // Olive green for grass
+            ground = new THREE.Mesh(groundGeometry, groundMaterial);
+            ground.rotation.x = -Math.PI / 2; // Rotate to be flat
+            ground.receiveShadow = true; // Ground receives shadows
+            scene.add(ground);
+
+            // Road System (cross shape, wider roads)
+            const roadWidth = 20; // Wider roads
+            const roadMaterial = new THREE.MeshStandardMaterial({ color: 0x333333, roughness: 0.7 }); // Darker grey for roads
+
+            // Horizontal road
+            const horizontalRoad = new THREE.Mesh(new THREE.PlaneGeometry(mapSize, roadWidth), roadMaterial);
+            horizontalRoad.rotation.x = -Math.PI / 2;
+            horizontalRoad.position.y = 0.01; // Slightly above ground to avoid z-fighting
+            horizontalRoad.receiveShadow = true;
+            scene.add(horizontalRoad);
+
+            // Vertical road
+            const verticalRoad = new THREE.Mesh(new THREE.PlaneGeometry(roadWidth, mapSize), roadMaterial);
+            verticalRoad.rotation.x = -Math.PI / 2;
+            verticalRoad.position.y = 0.01;
+            verticalRoad.receiveShadow = true;
+            scene.add(verticalRoad);
+
+            // Add more detailed road markings
+            const markingMaterialWhite = new THREE.MeshBasicMaterial({ color: 0xffffff }); // White for lines
+            const markingMaterialYellow = new THREE.MeshBasicMaterial({ color: 0xffff00 }); // Yellow for lines
+
+            // Dashed center lines for horizontal road
+            for (let i = -mapSize / 2 + 5; i < mapSize / 2 - 5; i += 10) {
+                const dash = new THREE.Mesh(new THREE.PlaneGeometry(5, 0.5), markingMaterialWhite);
+                dash.rotation.x = -Math.PI / 2;
+                dash.position.set(i, 0.02, 0);
+                scene.add(dash);
+            }
+
+            // Dashed center lines for vertical road
+            for (let i = -mapSize / 2 + 5; i < mapSize / 2 - 5; i += 10) {
+                const dash = new THREE.Mesh(new THREE.PlaneGeometry(0.5, 5), markingMaterialWhite);
+                dash.rotation.x = -Math.PI / 2;
+                dash.position.set(0, 0.02, i);
+                scene.add(dash);
+            }
+
+            // Solid edge lines for horizontal road
+            const edgeLineH1 = new THREE.Mesh(new THREE.PlaneGeometry(mapSize, 0.2), markingMaterialWhite);
+            edgeLineH1.rotation.x = -Math.PI / 2;
+            edgeLineH1.position.set(0, 0.02, roadWidth / 2 - 0.1);
+            scene.add(edgeLineH1);
+
+            const edgeLineH2 = new THREE.Mesh(new THREE.PlaneGeometry(mapSize, 0.2), markingMaterialWhite);
+            edgeLineH2.rotation.x = -Math.PI / 2;
+            edgeLineH2.position.set(0, 0.02, -roadWidth / 2 + 0.1);
+            scene.add(edgeLineH2);
+
+            // Solid edge lines for vertical road
+            const edgeLineV1 = new THREE.Mesh(new THREE.PlaneGeometry(0.2, mapSize), markingMaterialWhite);
+            edgeLineV1.rotation.x = -Math.PI / 2;
+            edgeLineV1.position.set(roadWidth / 2 - 0.1, 0.02, 0);
+            scene.add(edgeLineV1);
+
+            const edgeLineV2 = new THREE.Mesh(new THREE.PlaneGeometry(0.2, mapSize), markingMaterialWhite);
+            edgeLineV2.rotation.x = -Math.PI / 2;
+            edgeLineV2.position.set(-roadWidth / 2 + 0.1, 0.02, 0);
+            scene.add(edgeLineV2);
+        }
+
+        // --- CITY ELEMENTS (Placeholder Buildings and Trees) ---
+        function createCity() {
+            const numBuildings = 200; // More buildings
+            const buildingColors = [0xaaaaaa, 0x999999, 0x888888, 0x777777, 0xbbbbbb]; // Varied grey shades
+
+            for (let i = 0; i < numBuildings; i++) {
+                const width = Math.random() * 8 + 3;
+                const height = Math.random() * 30 + 10;
+                const depth = Math.random() * 8 + 3;
+
+                const buildingMaterial = new THREE.MeshStandardMaterial({
+                    color: buildingColors[Math.floor(Math.random() * buildingColors.length)],
+                    roughness: 0.7
+                });
+                const buildingGeometry = new THREE.BoxGeometry(width, height, depth);
+                const building = new THREE.Mesh(buildingGeometry, buildingMaterial);
+
+                let x, z;
+                const mapBoundary = 240; // Half of mapSize - buffer
+                const roadClearance = 30; // Keep clear around center roads
+
+                // Distribute buildings mostly off the main cross roads
+                do {
+                    x = (Math.random() - 0.5) * mapBoundary * 2;
+                    z = (Math.random() - 0.5) * mapBoundary * 2;
+                } while ( (Math.abs(x) < roadClearance && Math.abs(z) < roadClearance) || // Keep clear around center intersection
+                          (Math.abs(x) < (roadClearance / 2) + 5 && Math.abs(z) > roadClearance) || // Don't put buildings directly on horizontal road
+                          (Math.abs(z) < (roadClearance / 2) + 5 && Math.abs(x) > roadClearance) ); // Don't put buildings directly on vertical road
+
+                building.position.x = x;
+                building.position.z = z;
+                building.position.y = height / 2; // Base on the ground
+                building.castShadow = true;
+                building.receiveShadow = true;
+                scene.add(building);
+                cityObjects.push(building); // Add to cityObjects for collision
+
+                // Add bounding box for collision detection
+                building.userData.bbox = new THREE.Box3().setFromObject(building);
+            }
+
+            // Add Trees
+            const numTrees = 300;
+            const trunkMaterial = new THREE.MeshStandardMaterial({ color: 0x8B4513 }); // Brown
+            const leavesMaterial = new THREE.MeshStandardMaterial({ color: 0x228B22 }); // Forest green
+
+            for (let i = 0; i < numTrees; i++) {
+                const trunkHeight = Math.random() * 3 + 2;
+                const trunkRadius = Math.random() * 0.3 + 0.1;
+                const leavesRadius = Math.random() * 2 + 1;
+
+                const trunkGeometry = new THREE.CylinderGeometry(trunkRadius, trunkRadius, trunkHeight, 8);
+                const trunk = new THREE.Mesh(trunkGeometry, trunkMaterial);
+                trunk.castShadow = true;
+                trunk.receiveShadow = true;
+
+                const leavesGeometry = new THREE.ConeGeometry(leavesRadius, leavesRadius * 2, 8); // Simple cone for leaves
+                const leaves = new THREE.Mesh(leavesGeometry, leavesMaterial);
+                leaves.castShadow = true;
+                leaves.receiveShadow = true;
+
+                leaves.position.y = trunkHeight / 2 + leavesRadius; // Position leaves above trunk
+
+                const tree = new THREE.Group();
+                tree.add(trunk);
+                tree.add(leaves);
+
+                let x, z;
+                const mapBoundary = 240;
+                const roadClearance = 30;
+
+                // Distribute trees, avoiding roads and buildings
+                do {
+                    x = (Math.random() - 0.5) * mapBoundary * 2;
+                    z = (Math.random() - 0.5) * mapBoundary * 2;
+                    tree.position.set(x, trunkHeight / 2, z); // Base of trunk on ground
+                    tree.userData.bbox = new THREE.Box3().setFromObject(tree); // Update bbox for check
+                } while ( (Math.abs(x) < roadClearance && Math.abs(z) < roadClearance) ||
+                          (Math.abs(x) < (roadClearance / 2) + 5 && Math.abs(z) > roadClearance) ||
+                          (Math.abs(z) < (roadClearance / 2) + 5 && Math.abs(x) > roadClearance) ||
+                          cityObjects.some(obj => obj.userData.bbox.intersectsBox(tree.userData.bbox)) // Avoid existing buildings
+                        );
+
+                scene.add(tree);
+                cityObjects.push(tree); // Add to cityObjects for collision
+            }
+        }
+
+        // --- RAMPS ---
+        function createRamps() {
+            const rampMaterial = new THREE.MeshStandardMaterial({ color: 0x666666, roughness: 0.7 }); // Grey ramp material
+
+            // Ramp 1: Near the center, going up
+            const ramp1Geometry = new THREE.BoxGeometry(15, 2, 30); // width, height, depth
+            const ramp1 = new THREE.Mesh(ramp1Geometry, rampMaterial);
+            ramp1.position.set(50, 1, 0); // Position it (center of ramp)
+            ramp1.rotation.x = Math.PI / 10; // Tilt it upwards
+            ramp1.castShadow = true;
+            ramp1.receiveShadow = true;
+            ramp1.userData.size = new THREE.Vector3(15, 2, 30); // Store dimensions for horizontal check
+            scene.add(ramp1);
+            ramps.push(ramp1); // Add to ramps array
+            ramp1.userData.bbox = new THREE.Box3().setFromObject(ramp1);
+
+            // Ramp 2: Another ramp, different location/orientation
+            const ramp2Geometry = new THREE.BoxGeometry(20, 3, 40);
+            const ramp2 = new THREE.Mesh(ramp2Geometry, rampMaterial);
+            ramp2.position.set(-80, 1.5, 70); // Position it (center of ramp)
+            ramp2.rotation.z = -Math.PI / 8; // Tilt along Z-axis
+            ramp2.castShadow = true;
+            ramp2.receiveShadow = true;
+            ramp2.userData.size = new THREE.Vector3(20, 3, 40); // Store dimensions for horizontal check
+            scene.add(ramp2);
+            ramps.push(ramp2); // Add to ramps array
+            ramp2.userData.bbox = new THREE.Box3().setFromObject(ramp2);
+
+            // Ramp 3: A smaller jump ramp
+            const ramp3Geometry = new THREE.BoxGeometry(10, 1, 15);
+            const ramp3 = new THREE.Mesh(ramp3Geometry, rampMaterial);
+            ramp3.position.set(120, 0.5, -100); // Position it (center of ramp)
+            ramp3.rotation.x = Math.PI / 12;
+            ramp3.castShadow = true;
+            ramp3.receiveShadow = true;
+            ramp3.userData.size = new THREE.Vector3(10, 1, 15); // Store dimensions for horizontal check
+            scene.add(ramp3);
+            ramps.push(ramp3); // Add to ramps array
+            ramp3.userData.bbox = new THREE.Box3().setFromObject(ramp3);
+        }
+
+        // --- CONTROLS ---
+        function onKeyDown(event) {
+            switch (event.key.toLowerCase()) {
+                case 'arrowup':
+                case 'w':
+                    moveForward = true;
+                    break;
+                case 'arrowdown':
+                case 's':
+                    moveBackward = true;
+                    break;
+                case 'arrowleft':
+                case 'a':
+                    turnLeft = true;
+                    break;
+                case 'arrowright':
+                case 'd':
+                    turnRight = true;
+                    break;
+            }
+        }
+
+        function onKeyUp(event) {
+            switch (event.key.toLowerCase()) {
+                case 'arrowup':
+                case 'w':
+                    moveForward = false;
+                    break;
+                case 'arrowdown':
+                case 's':
+                    moveBackward = false;
+                    break;
+                case 'arrowleft':
+                case 'a':
+                    turnLeft = false;
+                    break;
+                case 'arrowright':
+                case 'd':
+                    turnRight = false;
+                    break;
+            }
+        }
+
+        // --- UPDATE CAR MOVEMENT ---
+        function updateCar() {
+            if (!car) return;
+
+            // Store previous position for potential revert (for obstacles)
+            const previousCarPosition = car.position.clone();
+
+            // Apply acceleration/deceleration
+            if (moveForward) {
+                currentSpeed = Math.min(maxSpeed, currentSpeed + accelerationRate);
+            } else if (moveBackward) {
+                currentSpeed = Math.max(-reverseSpeed, currentSpeed - accelerationRate);
+            } else {
+                // Apply friction when no keys are pressed
+                if (currentSpeed > 0) {
+                    currentSpeed = Math.max(0, currentSpeed - carFriction);
+                } else if (currentSpeed < 0) {
+                    currentSpeed = Math.min(0, currentSpeed + carFriction);
+                }
+            }
+
+            // Apply braking
+            if ((moveForward && currentSpeed < 0) || (moveBackward && currentSpeed > 0)) {
+                currentSpeed *= (1 - brakeRate); // Faster deceleration when "braking"
+                if (Math.abs(currentSpeed) < 0.01) currentSpeed = 0; // Snap to zero if very slow
+            }
+
+            // Apply rotation only when moving
+            if (Math.abs(currentSpeed) > 0.01) { // Only allow turning when moving
+                if (turnLeft) car.rotation.y += carRotationSpeed * (currentSpeed > 0 ? 1 : -1); // Reverse turning when reversing
+                if (turnRight) car.rotation.y -= carRotationSpeed * (currentSpeed > 0 ? 1 : -1); // Reverse turning when reversing
+            }
+
+            // Calculate movement vector based on car's current orientation
+            const moveX = Math.sin(car.rotation.y) * currentSpeed * 10;
+            const moveZ = Math.cos(car.rotation.y) * currentSpeed * 10;
+
+            // Update car's X and Z position
+            car.position.x += moveX;
+            car.position.z += moveZ;
+
+            // Apply gravity
+            car.userData.velocityY -= gravity;
+            car.position.y += car.userData.velocityY;
+
+            // Update car's bounding box to its NEW (x,y,z) position
+            car.userData.bbox.setFromObject(car);
+
+            let onRamp = false;
+            const groundLevelY = 0; // Car's base is at Y=0 on flat ground
+
+            // --- Ramp Interaction ---
+            for (const ramp of ramps) {
+                // Check if car's horizontal projection overlaps with ramp's horizontal projection
+                // This is a simplified check for being "over" the ramp
+                const carMinX = car.position.x - car.userData.bodyWidth / 2;
+                const carMaxX = car.position.x + car.userData.bodyWidth / 2;
+                const carMinZ = car.position.z - car.userData.bodyDepth / 2;
+                const carMaxZ = car.position.z + car.userData.bodyDepth / 2;
+
+                const rampMinX = ramp.position.x - ramp.userData.size.x / 2;
+                const rampMaxX = ramp.position.x + ramp.userData.size.x / 2;
+                const rampMinZ = ramp.position.z - ramp.userData.size.z / 2;
+                const rampMaxZ = ramp.position.z + ramp.userData.size.z / 2;
+
+                const overlapX = Math.max(0, Math.min(carMaxX, rampMaxX) - Math.max(carMinX, rampMinX));
+                const overlapZ = Math.max(0, Math.min(carMaxZ, rampMaxZ) - Math.max(carMinZ, rampMinZ));
+
+                if (overlapX > 0 && overlapZ > 0) { // If there's horizontal overlap
+                    // Now check if the car is actually "on" the ramp vertically
+                    const carBottomY = car.position.y;
+                    const rampTopY = ramp.userData.bbox.max.y; // Max Y of the ramp's bounding box
+
+                    // If car is above or slightly below the ramp's top, consider it on the ramp
+                    if (carBottomY <= rampTopY + 0.5 && carBottomY >= ramp.userData.bbox.min.y - car.userData.bodyHeight) {
+                        onRamp = true;
+
+                        // Get car's position relative to the ramp's local coordinate system
+                        const carLocalPos = new THREE.Vector3();
+                        carLocalPos.copy(car.position);
+                        ramp.worldToLocal(carLocalPos); // Transform car's world position to ramp's local position
+
+                        let targetLocalY = 0; // This will be the Y in the ramp's local space
+
+                        // For a ramp rotated around X (length along Z in world space)
+                        if (Math.abs(ramp.rotation.x) > 0.001) {
+                            targetLocalY = carLocalPos.z * Math.tan(ramp.rotation.x);
+                        }
+                        // For a ramp rotated around Z (length along X in world space)
+                        else if (Math.abs(ramp.rotation.z) > 0.001) {
+                            targetLocalY = carLocalPos.x * Math.tan(ramp.rotation.z);
+                        }
+
+                        // Calculate the target world Y position for the car's base
+                        // ramp.position.y is the center of the ramp. We need to find the bottom of the ramp at that point.
+                        const rampBaseY = ramp.position.y - ramp.userData.size.y / 2;
+                        const desiredCarY = rampBaseY + targetLocalY;
+
+                        // Set car's Y position and reset vertical velocity
+                        car.position.y = desiredCarY;
+                        car.userData.velocityY = 0;
+
+                        // Adjust car's rotation to match the ramp's slope
+                        car.rotation.x = ramp.rotation.x;
+                        car.rotation.z = ramp.rotation.z;
+                        break; // Assume car is on only one ramp at a time
+                    }
+                }
+            }
+
+            // If not on any ramp, or if it just left a ramp and is falling
+            if (!onRamp) {
+                // If car falls below ground level, clamp it to ground and stop vertical movement
+                if (car.position.y < groundLevelY) {
+                    car.position.y = groundLevelY;
+                    car.userData.velocityY = 0;
+                }
+                // Reset car's pitch and roll when not on a ramp
+                car.rotation.x = 0;
+                car.rotation.z = 0;
+            }
+
+            // --- Obstacle Collision Detection (Buildings and Trees) ---
+            for (const object of cityObjects) {
+                if (car.userData.bbox.intersectsBox(object.userData.bbox)) {
+                    // Collision detected with an obstacle! Revert car position and stop
+                    car.position.copy(previousCarPosition);
+                    currentSpeed = 0;
+                    car.userData.velocityY = 0; // Also stop vertical movement on collision
+                    break; // Only handle one collision at a time
+                }
+            }
+
+            // Simple boundary check to keep car on the map
+            const boundary = 245; // Half of mapSize - a small buffer
+            if (car.position.x > boundary) car.position.x = boundary;
+            if (car.position.x < -boundary) car.position.x = -boundary;
+            if (car.position.z > boundary) car.position.z = boundary;
+            if (car.position.z < -boundary) car.position.z = -boundary;
+
+            // Update speedometer
+            const speedKmh = Math.abs(currentSpeed * 100); // Scale speed for display
+            speedDisplay.textContent = speedKmh.toFixed(0); // Display as integer
+        }
+
+        // --- UPDATE CAMERA ---
+        function updateCamera() {
+            if (!car || !camera) return;
+
+            // Calculate desired camera position: behind and above the car
+            const relativeCameraOffset = new THREE.Vector3(0, 6, -12); // x, y (height), z (distance behind)
+
+            // Apply car's rotation and position to the offset vector
+            const cameraOffset = relativeCameraOffset.applyMatrix4(car.matrixWorld);
+
+            // Smoothly interpolate camera position
+            camera.position.lerp(cameraOffset, 0.1);
+
+            // Make camera look at a point slightly in front of the car's center for better driving view
+            const lookAtPoint = new THREE.Vector3(0, 1.5, 5); // Target point in car's local space
+            const worldLookAtPoint = lookAtPoint.applyMatrix4(car.matrixWorld);
+            camera.lookAt(worldLookAtPoint);
+        }
+
+        // --- WINDOW RESIZE HANDLING ---
+        function onWindowResize() {
+            camera.aspect = window.innerWidth / window.innerHeight;
+            camera.updateProjectionMatrix();
+            renderer.setSize(window.innerWidth, window.innerHeight);
+        }
+
+        // --- ANIMATION LOOP ---
+        function animate() {
+            requestAnimationFrame(animate);
+
+            updateCar();
+            updateCamera();
+
+            renderer.render(scene, camera);
+        }
+
+        // --- START THE GAME ---
+        window.onload = function () {
+            if (typeof THREE !== 'undefined') {
+                init();
+            } else {
+                console.error("Three.js library not loaded. Game cannot start.");
+                const gameContainer = document.getElementById('gameContainer');
+                if (gameContainer) {
+                    gameContainer.innerHTML = '<p style="color:white; text-align:center; padding-top: 50px;">Error: Could not load game resources. Please try refreshing.</p>';
+                }
+            }
+        };
+    </script>
+</body>
+</html>
